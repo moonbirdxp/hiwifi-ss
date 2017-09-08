@@ -17,7 +17,7 @@ function index()
     page.index = true
 
     -- get_version 获取版本
-    entry({ "api", "prometheus", "get_version" }, call("get_version"), _(""), 601)
+    entry({ "api", "prometheus", "get_ss_version" }, call("get_ss_version"), _(""), 601)
     -- get_ss_cfg  获取 ss 配置
     entry({ "api", "prometheus", "get_ss_cfg" }, call("get_ss_cfg"), _(""), 602)
     -- set_ss_cfg  保存 ss 配置
@@ -30,12 +30,14 @@ function index()
     entry({ "api", "prometheus", "start_ss" }, call("start_ss"), _(""), 606)
     -- get_ss_status  获取 ss 状态
     entry({ "api", "prometheus", "get_ss_status" }, call("get_ss_status"), _(""), 607)
-    -- prometheus_upgrade  升级
-    entry({ "api", "prometheus", "prometheus_upgrade" }, call("prometheus_upgrade"), _(""), 608)
+    --   升级
+    entry({ "api", "prometheus", "check_ss_updates" }, call("check_ss_updates"), _(""), 608)
+    entry({ "api", "prometheus", "upgrade_ss" }, call("upgrade_ss"), _(""), 608)
 end
 
 
 local luci_http = require("luci.http")
+local VERSION = 'v1.0.6'
 --local log = require "luci.log"
 
 function json_return(content)
@@ -43,11 +45,35 @@ function json_return(content)
 	luci_http.write_json(content, true)
 end
 
-function get_version()
+
+function check_ss_updates()
+    local latest_version = luci.sys.exec('curl -k https://api.github.com/repos/qiwihui/hiwifi-ss/releases/latest -s | grep "tag_name" | awk "{ print $2 }" | sed s/\"//g | sed s/,//g')
+    if VERSION ~= latest_version then
+        result["code"] = 0
+        result["has_updates"] = 1
+        result["latest_version"] = latest_version
+        json_return(result)
+    else
+        result["code"] = 0
+        result["has_updates"] = 0
+        result["latest_version"] = latest_version
+        json_return(result)
+    end
+end
+
+function upgrade_ss()
+    luci.sys.exec("cd /tmp && curl -k -o shadow.sh https://raw.githubusercontent.com/qiwihui/hiwifi-ss/master/shadow.sh && sh shadow.sh && rm shadow.sh")
+    -- todo check if upgraded?
+    result['code'] = 0
+	result['version'] = "success"
+	json_return(result)
+end
+
+function get_ss_version()
     -- ss 版本
 	local result = {}
 	result['code'] = 0
-	result['info'] = "1.0.0"
+	result['version'] = VERSION
 	json_return(result)
 end
 
@@ -67,6 +93,9 @@ function get_ss_cfg()
     result['dnsserver'] = config['dnsserver'] or '8.8.4.4'
     result['udp_relay'] = config['udp_relay'] or '0'
 
+    result['plugin_opts'] = config['plugin_opts'] or 'obfs=http;obfs-host=www.bing.com'
+    result['plugin_enable'] = config['plugin_enable'] or '0'
+
     result["code"] = 0
     json_return(result)
 end
@@ -83,6 +112,10 @@ function set_ss_cfg()
     local defaultroute = luci.http.formvalue("defaultroute")
     local dnsserver = luci.http.formvalue("dnsserver")
     local udp_relay = luci.http.formvalue("udp_relay")
+    -- simple obfs switch
+    local plugin_enable = luci.http.formvalue("plugin_enable")
+--    local plugin = luci.http.formvalue("plugin")
+    local plugin_opts = luci.http.formvalue("plugin_opts")
 
     -- 查看是否有 shadowsocks 的配置，有则修改，无则创建
     local has_config = luci.sys.exec("test -f /etc/config/shadowsocks && echo -n 'yes' || echo -n 'no'")
@@ -92,6 +125,8 @@ function set_ss_cfg()
         luci.sys.exec('uci set shadowsocks.shadowsocks.enable="0";')
         luci.sys.exec('uci set shadowsocks.shadowsocks.local_port="61080";')
         luci.sys.exec('uci set shadowsocks.shadowsocks.rs_port=3088;')
+        -- default obfs config
+        luci.sys.exec('uci set shadowsocks.shadowsocks.plugin_enable="0";')
     end
 
     luci.sys.exec('uci set shadowsocks.shadowsocks.server='..server..';')
@@ -102,6 +137,10 @@ function set_ss_cfg()
     luci.sys.exec('uci set shadowsocks.shadowsocks.dnsserver='..dnsserver..';')
     luci.sys.exec('uci set shadowsocks.shadowsocks.timeout='..timeout..';')
     luci.sys.exec('uci set shadowsocks.shadowsocks.udp_relay='..udp_relay..';')
+    -- simple obfs
+    luci.sys.exec('uci set shadowsocks.shadowsocks.plugin_enable='..plugin_enable..';')
+    luci.sys.exec('uci set shadowsocks.shadowsocks.plugin="obfs-local";')
+    luci.sys.exec('uci set shadowsocks.shadowsocks.plugin_opts=\"'..plugin_opts..'\";')
     luci.sys.exec('uci commit;')
 
     -- reload ss
